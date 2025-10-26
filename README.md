@@ -8,6 +8,7 @@ Celem projektu była analiza statystyczna mająca na celu zbadanie zależności 
 - sucrose – (X2)
 - brix – (X3)
 - roots – (X4)
+  
 Zakres analizy obejmował następujące etapy:
 - budowa modelu regresji liniowej z wszystkimi zmiennymi objaśniającymi (X1–X4),
 - diagnostyka modelu, w tym analiza reszt, wykresów diagnostycznych oraz testów statystycznych poznanych na zajęciach,
