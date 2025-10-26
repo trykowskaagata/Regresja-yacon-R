@@ -1,0 +1,250 @@
+---
+title: "AnalizaRegresji"
+author: "Agata Trykowska"
+date: "2025-10-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Yacon CAJ: wpływ składników na poziom glukozy
+# Analiza regresji liniowej
+
+```{r biblioteki}
+library(agricolae)
+library(lmtest)
+library(car)
+library(corrplot)
+library(tseries)
+library(robust)
+library(MASS)
+library(leaps)
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+```
+
+### Przygotowanie danych
+
+```{r dane}
+data(yacon)
+data_caj <- subset(yacon, locality == "CAJ")
+data_caj <- data.frame(data_caj)  
+
+Y <- data_caj$glucose    
+X1 <- data_caj$fructose  
+X2 <- data_caj$sucrose   
+X3 <- data_caj$brix      
+X4 <- data_caj$roots     
+
+reg_data <- data.frame(
+  glucose = Y,
+  fructose = X1,
+  sucrose = X2,
+  brix = X3,
+  roots = X4
+)
+reg_data <- na.omit(reg_data)
+n <- nrow(reg_data)
+n
+```
+
+Liczba obserwacji: 144
+
+```{r dane_pods}
+summary(reg_data)
+```
+
+```{r head}
+head(reg_data)
+```
+
+### Model
+
+```{r model2}
+full_model <- lm(glucose ~ fructose + sucrose + brix + roots, data = reg_data)
+summary(full_model)
+```
+
+Model pełny wyjaśnia około 79% zmienności zawartości glukozy i jest istotny statystycznie. Najsilniejszym predyktorem okazała się fruktoza, która ma wyraźny dodatni wpływ. Sacharoza działa słabiej i jej wpływ jest niepewny, natomiast brix i roots nie są istotne. Ogólnie model jest dobrze dopasowany, choć część zmiennych wydaje się być zbędna.
+
+### Wykresy diagnostyczne
+
+```{r wykresy_diag}
+par(mfrow = c(2, 2))
+plot(full_model)
+par(mfrow = c(1, 1))
+```
+
+Model narusza kilka założeń regresji: reszty wskazują na nieliniowość i brak normalności, występuje heteroskedastyczność oraz obserwacje o dużej dźwigni. To podważa wiarygodność wyników, dlatego warto rozważyć transformacje zmiennych, usunięcie odstających punktów lub zastosowanie metod odpornych na naruszenia założeń.
+
+### Testy normalności
+
+```{r normalności}
+shapiro_test <- shapiro.test(residuals(full_model))
+shapiro_test
+jb_test <- jarque.bera.test(residuals(full_model))
+jb_test
+```
+
+Oba testy wskazują na bardzo niskie wartości p, zatem odrzucamy hipotezę o normalności reszt. Reszty nie są więc rozkładem normalnym, co narudsza jedno z kluczowych założeń regresji.
+
+```{r bp}
+bp_test <- bptest(full_model)
+bp_test
+```
+
+Test daje niskie p-value, co prowadzi do odrzucenia hipotezy o homoscedastyczności. Oznacza to, że w modelu występuje heteroskedastyczność, czyli zmienna wariancja reszt.
+
+### Obserwacje odstające i wpływowe
+
+```{r wart_odst}
+outlier_test <- outlierTest(full_model)
+print(outlier_test)
+
+cooksd <- cooks.distance(full_model)
+prog <- 4/n
+wplywowe <- which(cooksd > prog)
+
+cat("Próg Cook'a (4/n):", prog, "\n")
+cat("Liczba obserwacji wpływowych:", length(wplywowe), "\n")
+cat("Indeksy obserwacji:", wplywowe, "\n")
+```
+
+Punkt 113 ma bardzo wysoką studentyzowaną resztę i istotny wynik restu Bonferroniego. Łącznie zidentyfikowano 10 obserwacji przekraczających próg Cooka, co oznacza, że mogą one znacząco zniekształcać dopasowanie modelu i wymagają dokładniejszej analizy lub ewentualnego wykluczenia.
+
+```{r cook_plot}
+par(mfrow = c(2, 2))
+plot(full_model)
+par(mfrow = c(1, 2))
+plot(full_model, c(4, 6))
+```
+
+Obserwacje 129, 109 i 112 są wpływowe i odstające; diagnostyka pokazuje nieliniowość, narastającą wariancję reszt (heteroskedastyczność) oraz odchylenie od normalności.
+
+```{r wplyw_dane}
+wplywowe <- c(78, 99, 102, 109, 112, 113, 116, 129, 135, 141)
+reg_data[wplywowe, c("glucose", "fructose", "sucrose", "brix", "roots")]
+```
+
+Obserwacja 109 jest ekstremalna z powodu bardzo wysokiego surcose = 37,30, co silnie wpływa na model. Obserwacje 112 i 116 mają ujemne Brix (-1,36 i -0,82), ale są mniej ekstremalne.
+
+```{r bez_odst}
+no_109 <- reg_data[-109, ]
+model_no_109 <- lm(glucose ~ fructose + sucrose + brix + roots, data = no_109)
+
+summary(model_no_109)
+```
+
+Usunięcie obserwacji 109 poprawia dopasowanie modelu.
+
+```{r normalność_porównanie}
+cat("Test shapiro na pierwotnym modelu:\n")
+shapiro.test(residuals(full_model))
+
+cat("\nTest shapiro na modelu bez 109:\n")
+shapiro.test(residuals(model_no_109))
+```
+
+Usunięcie obserwacji 109 nie rozwiązało problemu normalności reszt – oba modele wciąż wykazują znaczące odchylenia, mimo niewielkiej poprawy W. Normalność reszt jest fundamentalnie naruszona, ale przy dużej próbie model pozostaje użyteczny.
+
+```{r translog}
+log_model <- lm(log(glucose) ~ log(fructose) + brix, data = reg_data)
+summary(log_model)
+
+
+robust_model <- lmRob(glucose ~ fructose + brix, data = reg_data)
+shapiro.test(residuals(log_model))
+bptest(log_model)
+```
+
+Model jest zdecydowanie lepszy. Transformacja logarytmiczna okazała być się bardzo skuteczna. Jeśli chodzi o Heteroskedastyczność, to jest znacząca poprawa, choć nieznaczne naruszenie pozostaje (p = 0.019).
+
+```{r multi}
+vif_values <- vif(log_model)
+print(round(vif_values, 2))
+
+cor_matrix <- cor(reg_data[2:5])
+corrplot(cor_matrix, method = "color", addCoef.col = "black", tl.cex = 0.9)
+```
+
+Najsilniejsza korelacja dotyczy pary roots – brix (0,97)
+
+### Wybór modelu
+
+```{r wybór_modelu}
+regsubsets_result <- regsubsets(glucose ~ ., data = reg_data, nvmax = 4)
+reg_summary <- summary(regsubsets_result)
+
+selection_table <- data.frame(
+  Variables = 1:4,
+  Adj_R2 = round(reg_summary$adjr2, 4),
+  BIC = round(reg_summary$bic, 1)
+)
+selection_table
+```
+
+Najlepszym wyborem jest model 2 zmiennych.
+
+```{r porównanie_modeli}
+model_log1 <- lm(log(glucose) ~ log(fructose) + log(sucrose), data = reg_data)
+model_log2 <- lm(log(glucose) ~ log(fructose) + brix, data = reg_data)
+model_log3 <- lm(log(glucose) ~ log(fructose) + log(brix), data = reg_data)
+model_log4 <- lm(log(glucose) ~ log(fructose) + log(sucrose) + brix, data = reg_data)
+
+# Porównanie modeli
+porównanie_modeli <- data.frame(
+  Model = c("log(fructose) + log(sucrose)", 
+            "log(fructose) + brix", 
+            "log(fructose) + log(brix)",
+            "log(fructose) + log(sucrose) + brix"),
+  Adj_R2 = round(c(summary(model_log1)$adj.r.squared,
+                   summary(model_log2)$adj.r.squared,
+                   summary(model_log3)$adj.r.squared,
+                   summary(model_log4)$adj.r.squared), 4),
+  AIC = round(c(AIC(model_log1), AIC(model_log2), AIC(model_log3), AIC(model_log4)), 1),
+  BIC = round(c(BIC(model_log1), BIC(model_log2), BIC(model_log3), BIC(model_log4)), 1)
+)
+porównanie_modeli
+```
+
+Model log(fructose) + brix ma najwyższy skorygowany współczynnik determinacji (0.8672) i stosunkowo niskie AIC/BIC, co czyni go najlepszym wyborem
+
+```{r train_test}
+set.seed(123)
+n <- nrow(reg_data)
+idx <- sample(n, round(0.7*n))
+tr <- reg_data[idx,]; te <- reg_data[-idx,]
+
+m1 <- lm(log(glucose) ~ log(fructose) + brix, data = tr)
+m2 <- lm(log(glucose) ~ log(fructose) + log(brix), data = tr)
+
+p1 <- exp(predict(m1, te)); p2 <- exp(predict(m2, te))
+
+sse1 <- sum((te$glucose - p1)^2); rmse1 <- sqrt(sse1 / nrow(te))
+sse2 <- sum((te$glucose - p2)^2); rmse2 <- sqrt(sse2 / nrow(te))
+
+data.frame(Model = c("log(fructose)+brix","log(fructose)+log(brix)"),
+           SSE = c(sse1, sse2), RMSE = c(rmse1, rmse2))
+
+```
+
+```{r log_model}
+final_log_model <- lm(log(glucose) ~ log(fructose) + brix, data = reg_data)
+summary(final_log_model)
+
+# Funkcja predykcji z bias correction
+predict_gluc <- function(fructose_val, brix_val) {
+  log_pred <- predict(final_log_model, newdata = data.frame(fructose = fructose_val, brix = brix_val))
+  smearing_factor <- mean(exp(residuals(final_log_model)))
+  exp(log_pred) * smearing_factor
+
+}
+coef(log_model)
+```
+
+**Model po transformacji logarytmicznej:** $\log(glucose) = \beta_0 + \beta_1 \cdot \log(fructose) + \beta_2 \cdot brix$
+
+Model z transformacją logarytmiczną `log(glucose) ~ log(fructose) + brix` wyjaśnia około 87% zmienności glukozy.
